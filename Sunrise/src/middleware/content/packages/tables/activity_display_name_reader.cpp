@@ -251,8 +251,10 @@ add_relative(std::size_t member, std::int64_t relative, std::size_t& target) noe
         return false;
     }
     output.resize(indexRows.count);
-    const std::size_t indexEnd = indexRows.data + indexRows.count * kActivityIndexStride;
-    std::size_t previousRecord = 0;
+    // Records are bounds-checked, not position-checked: a patch generation that grows the table
+    // (D2RE spec-entry-growth) relocates the index array and appends new records past the display
+    // array, so "record between index end and display start, ascending" no longer holds. The stock
+    // table satisfied it; a grown one is still well-formed.
     for (std::size_t index = 0; index < output.size(); ++index) {
         const std::size_t row = indexRows.data + index * kActivityIndexStride;
         std::uint32_t hash = 0;
@@ -265,8 +267,7 @@ add_relative(std::size_t member, std::int64_t relative, std::size_t& target) noe
             || !read(blob, row + 4, padding) || padding != 0
             || !read(blob, row + kActivityIndexPointerOffset, recordRelative)
             || !add_relative(row + kActivityIndexPointerOffset, recordRelative, record)
-            || record < indexEnd || record >= displayRows.data
-            || (index != 0 && record <= previousRecord) || !read(blob, record, displayRelative)
+            || record >= blob.size() || !read(blob, record, displayRelative)
             || !add_relative(record, displayRelative, display) || display < displayRows.data
             || display >= displayRows.data + displayRows.count * kDisplayStride
             || (display - displayRows.data) % kDisplayStride != 0
@@ -274,7 +275,6 @@ add_relative(std::size_t member, std::int64_t relative, std::size_t& target) noe
             || !read(blob, display + kDisplayNameOffset + 4, output[index].stringHash)) {
             return false;
         }
-        previousRecord = record;
     }
     return true;
 }

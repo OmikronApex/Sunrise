@@ -2,19 +2,22 @@
 
 #include <array>
 #include <limits>
+#include <vector>
 
 #include "internal.h"
 
 namespace sunrise::middleware::content::packages::tables {
 namespace {
 
-/** The fixed activity index begins after the table prefix. */
-constexpr std::size_t kIndexOffset = 160;
+/** The index array descriptor {u64 count, i64 rel -> 16-byte block header} sits at +8. Stock
+ * places the rows at +160; a grown generation (D2RE spec-entry-growth) relocates them to the
+ * end of the blob, so the descriptor is followed rather than a fixed offset assumed. */
+constexpr std::size_t kIndexDescriptorOffset = 8;
+constexpr std::size_t kArrayHeaderSize = 16;
 /** One index row holds a hash, zero padding, and a signed self-relative pointer. */
 constexpr std::size_t kIndexStride = 16;
 constexpr std::size_t kIndexPaddingOffset = 4;
 constexpr std::size_t kIndexPointerOffset = 8;
-constexpr std::size_t kIndexEnd = kIndexOffset + kActivityDefinitionCount * kIndexStride;
 /** Every fixed field used by the inventory ends inside the first 225 record bytes. */
 constexpr std::size_t kMinimumRecordSize = 225;
 
@@ -102,12 +105,28 @@ add_relative(std::size_t member, std::int64_t relative, std::size_t& target) noe
     return false;
 }
 
-/** Reads and validates the fixed 1,170-row index. */
-[[nodiscard]] bool read_index(std::span<const std::byte> blob,
-                              std::array<IndexRow, kActivityDefinitionCount>& rows) noexcept {
+/** Reads and validates the index the table's descriptor names (1,170 rows stock). */
+[[nodiscard]] bool read_index(std::span<const std::byte> blob, std::vector<IndexRow>& rows) {
+    rows.clear();
+    std::uint64_t count = 0;
+    std::int64_t headerRelative = 0;
+    std::size_t header = 0;
+    std::uint64_t repeated = 0;
+    if (!read(blob, kIndexDescriptorOffset, count) || count == 0
+        || count > kActivityDefinitionCapacity
+        || !read(blob, kIndexDescriptorOffset + 8, headerRelative)
+        || !add_relative(kIndexDescriptorOffset + 8, headerRelative, header)
+        || header >= blob.size() || kArrayHeaderSize > blob.size() - header
+        || !read(blob, header, repeated) || repeated != count
+        || count * kIndexStride > blob.size() - header - kArrayHeaderSize) {
+        return false;
+    }
+    const std::size_t indexOffset = header + kArrayHeaderSize;
+    const std::size_t indexEnd = indexOffset + static_cast<std::size_t>(count) * kIndexStride;
+    rows.resize(static_cast<std::size_t>(count));
     std::size_t previousOffset = 0;
     for (std::size_t index = 0; index < rows.size(); ++index) {
-        const std::size_t offset = kIndexOffset + index * kIndexStride;
+        const std::size_t offset = indexOffset + index * kIndexStride;
         std::uint32_t padding = 0;
         std::int64_t relative = 0;
         std::size_t recordOffset = 0;
@@ -115,7 +134,8 @@ add_relative(std::size_t member, std::int64_t relative, std::size_t& target) noe
             || !read(blob, offset + kIndexPaddingOffset, padding) || padding != 0
             || !read(blob, offset + kIndexPointerOffset, relative)
             || !add_relative(offset + kIndexPointerOffset, relative, recordOffset)
-            || recordOffset < kIndexEnd || recordOffset >= blob.size()
+            // Records never overlap the live index; a relocated index sits past every record.
+            || (recordOffset >= indexOffset && recordOffset < indexEnd) || recordOffset >= blob.size()
             || (index != 0 && recordOffset <= previousOffset)) {
             return false;
         }
@@ -127,7 +147,7 @@ add_relative(std::size_t member, std::int64_t relative, std::size_t& target) noe
 
 /** Reads one activity after the complete index has passed validation. */
 [[nodiscard]] bool read_definition(std::span<const std::byte> blob,
-                                   const std::array<IndexRow, kActivityDefinitionCount>& rows,
+                                   const std::vector<IndexRow>& rows,
                                    std::size_t index,
                                    ActivityDefinition& output) noexcept {
     output = {};
@@ -188,11 +208,15 @@ add_relative(std::size_t member, std::int64_t relative, std::size_t& target) noe
 bool visit_activity_definitions(std::span<const std::byte> blob,
                                 ActivityDefinitionVisitor visitor,
                                 void* context) noexcept {
-    if (visitor == nullptr || blob.size() < kIndexEnd) {
+    if (visitor == nullptr) {
         return false;
     }
-    std::array<IndexRow, kActivityDefinitionCount> rows{};
-    if (!read_index(blob, rows)) {
+    std::vector<IndexRow> rows{};
+    try {
+        if (!read_index(blob, rows)) {
+            return false;
+        }
+    } catch (...) {
         return false;
     }
 

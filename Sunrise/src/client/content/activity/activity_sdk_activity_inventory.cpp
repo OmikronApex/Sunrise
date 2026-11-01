@@ -541,7 +541,7 @@ bool build(const reader::Source& source,
         std::vector<tables::ActivityDefinition> definitions{};
         definitions.reserve(tables::kActivityDefinitionCount);
         if (!tables::visit_activity_definitions(bytes, &collect_definition, &definitions)
-            || definitions.size() != tables::kActivityDefinitionCount
+            || definitions.size() < tables::kActivityDefinitionCount
             || !join(definitions,
                      output.activityRoots,
                      output.scenarios,

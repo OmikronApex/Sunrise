@@ -11,8 +11,10 @@ namespace sunrise::middleware::content::packages::tables {
 inline constexpr std::uint32_t kActivityDefinitionTableTag = 0x81327CF0U;
 /** Installed activity-definition table class. */
 inline constexpr std::uint32_t kActivityDefinitionTableClass = 0x808076F0U;
-/** The installed table contains this exact number of activity definitions. */
+/** The stock table holds this many activity definitions; a patch generation may append more. */
 inline constexpr std::size_t kActivityDefinitionCount = 1170;
+/** Upper bound accepted from the table's own array descriptor. */
+inline constexpr std::size_t kActivityDefinitionCapacity = 8192;
 /** An internal name must terminate within this many bytes. */
 inline constexpr std::size_t kActivityDefinitionInternalNameCapacity = 256;
 /** The all-one tag marks an activity with no matchmaking configuration. */
